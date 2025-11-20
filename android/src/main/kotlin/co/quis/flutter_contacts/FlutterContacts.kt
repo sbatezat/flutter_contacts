@@ -268,16 +268,27 @@ class FlutterContacts {
 
                     // Fetch high-resolution photo if requested.
                     if (withPhoto) {
-                        val contactUri: Uri =
-                            ContentUris.withAppendedId(Contacts.CONTENT_URI, id.toLong())
-                        val displayPhotoUri: Uri =
-                            Uri.withAppendedPath(contactUri, Contacts.Photo.DISPLAY_PHOTO)
-                        try {
-                            var fis: InputStream? = resolver.openInputStream(displayPhotoUri)
-                            contact.photo = fis?.readBytes()
-                        } catch (e: FileNotFoundException) {
-                            // This happens when no high-resolution photo exists, and is
-                            // a common situation.
+                        // When selecting by raw-contact ID, the "id" used above may be a
+                        // RAW_CONTACT_ID instead of a CONTACT_ID. Use CONTACT_ID directly
+                        // for photo lookup and guard against empty/invalid IDs.
+                        val contactIdStr = getString(Data.CONTACT_ID)
+                        if (contactIdStr.isNotEmpty()) {
+                            try {
+                                val contactIdLong = contactIdStr.toLong()
+                                val contactUri: Uri =
+                                    ContentUris.withAppendedId(Contacts.CONTENT_URI, contactIdLong)
+                                val displayPhotoUri: Uri =
+                                    Uri.withAppendedPath(contactUri, Contacts.Photo.DISPLAY_PHOTO)
+                                try {
+                                    var fis: InputStream? = resolver.openInputStream(displayPhotoUri)
+                                    contact.photo = fis?.readBytes()
+                                } catch (e: FileNotFoundException) {
+                                    // This happens when no high-resolution photo exists, and is
+                                    // a common situation.
+                                }
+                            } catch (e: NumberFormatException) {
+                                Log.w("FlutterContacts", "Skipping photo load for contact with invalid ID: $contactIdStr")
+                            }
                         }
                     }
 
@@ -478,49 +489,21 @@ class FlutterContacts {
             context: Context,
             contactMap: Map<String, Any?>
         ): Map<String, Any?>? {
-            Log.e("FlutterContacts", "FC_MARKER: insert called")
             val ops = mutableListOf<ContentProviderOperation>()
 
             val contact = Contact.fromMap(contactMap)
 
-            // Log the contact being inserted
-            Log.d("FlutterContacts", "Inserting contact: ${contact.displayName ?: "Unknown"} (ID: ${contact.id})")
-            Log.d("FlutterContacts", "Full contact data: $contact")
-
-            // Handle account creation with proper fallback for cloud account scenarios.
-            //
             // When the default account is set to a cloud account (like Google), Android
-            // doesn't allow creating contacts with no account or local accounts. In this
-            // case, we need to use an appropriate cloud account.
-            if (contact.accounts.isEmpty()) {
-                // Try to get a suitable default account to avoid the cloud account error
-                val defaultAccount = getDefaultWritableAccount(context, resolver)
-                if (defaultAccount == null) {
-                    // Surface a clear error instead of crashing
-                    throw IllegalStateException(
-                        "No writable cloud account found for contacts. " +
-                            "Please add a Google account or change the default contacts account."
-                    )
-                }
-
-                val (accountType, accountName) = defaultAccount
-                ops.add(
-                    ContentProviderOperation.newInsert(RawContacts.CONTENT_URI)
-                        .withValue(RawContacts.ACCOUNT_TYPE, accountType)
-                        .withValue(RawContacts.ACCOUNT_NAME, accountName)
-                        .build()
-                )
-                
-                Log.d("FlutterContacts", "Creating contact with account - Type: $accountType, Name: $accountName")
-            } else {
-                // Use the explicitly provided account
-                ops.add(
-                    ContentProviderOperation.newInsert(RawContacts.CONTENT_URI)
-                        .withValue(RawContacts.ACCOUNT_TYPE, contact.accounts.first().type)
-                        .withValue(RawContacts.ACCOUNT_NAME, contact.accounts.first().name)
-                        .build()
-                )
-            }
+            // can route new contacts to the appropriate account automatically. To avoid
+            // provider errors about local/SIM accounts, we do not force ACCOUNT_TYPE or
+            // ACCOUNT_NAME here and let the Contacts provider choose the right account.
+            // However, some providers expect non-empty ContentValues, so we set STARRED
+            // here as an initial value (it will be updated again below if needed).
+            ops.add(
+                ContentProviderOperation.newInsert(RawContacts.CONTENT_URI)
+                    .withValue(ContactsContract.RawContacts.STARRED, if (contact.isStarred) 1 else 0)
+                    .build()
+            )
 
             // Build all properties.
             buildOpsForContact(contact, ops)
