@@ -9,11 +9,29 @@ import ContactsUI
 public class ContactViewIOS: NSObject, CNContactViewControllerDelegate, CNContactPickerDelegate {
 
     private let flutterContactsPlugin: FlutterContactsPlugin
-    public var rootViewController: UIViewController
+    
+    private var keyWindow: UIWindow? {
+        if #available(iOS 13, *) {
+                // Get key window from currently active scene
+                return UIApplication.shared.connectedScenes
+                        .filter { $0.activationState == .foregroundActive }
+                        .compactMap { $0 as? UIWindowScene }
+                        .flatMap { $0.windows }
+                        .first { $0.isKeyWindow }
+        } else {
+                // Fallback to old way from application delgate
+                return UIApplication.shared.delegate!.window!
+        }
+    }
+
+    public var rootViewController: UIViewController {
+        let window = keyWindow
+        assert(window != nil)
+        return window!.rootViewController!
+    }
 
     init(_ flutterContactsPlugin: FlutterContactsPlugin) {
         self.flutterContactsPlugin = flutterContactsPlugin;
-        rootViewController = UIApplication.shared.delegate!.window!!.rootViewController!
     }
 
     public func contactViewController(_ viewController: CNContactViewController, didCompleteWith contact: CNContact?) { 
